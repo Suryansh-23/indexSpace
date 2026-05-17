@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAccount, useChainId, useWriteContract, useWaitForTransactionReceipt, useReadContract } from 'wagmi'
 import { useConnectModal } from '@rainbow-me/rainbowkit'
-import { parseUnits } from 'viem'
+import { parseUnits, formatUnits } from 'viem'
 import type { Address } from 'viem'
 import { cn } from '@/lib/utils'
 import { ChevronRight, Loader } from 'lucide-react'
@@ -12,6 +12,7 @@ import { TRADE_STEPS, type TradeStep } from '@/lib/mock-data'
 import { getVaultAddress } from '@/lib/contracts'
 import vaultAbiJson from '@/lib/IndexVault.json'
 import { getVaultRequests, quoteSubscribe, quoteRedeem } from '@/lib/indexspace-api'
+import { useToast } from '@/components/indexspace/toast-provider'
 
 const ERC20_ABI = [
   {
@@ -79,6 +80,7 @@ export function TradeDrawer({ vault, walletConnected }: TradeDrawerProps) {
   const { address } = useAccount()
   const chainId = useChainId()
   const { openConnectModal } = useConnectModal()
+  const { addToast } = useToast()
 
   const [mounted, setMounted] = useState(false)
   const [mode, setMode] = useState<TradeMode>('subscribe')
@@ -178,14 +180,14 @@ export function TradeDrawer({ vault, walletConnected }: TradeDrawerProps) {
     },
   })
 
-  // Vault share balance — checked at the redeem request step to surface an early error
+  // Vault share balance — read at redeem steps; used for MAX button and insufficientShares check
   const { data: shareBalance } = useReadContract({
     address: vaultAddress ?? undefined,
     abi: vaultAbiJson.abi as any,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
     query: {
-      enabled: !!address && !!vaultAddress && mode === 'redeem' && step === 'request',
+      enabled: !!address && !!vaultAddress && mode === 'redeem' && (step === 'approve usdc' || step === 'request'),
       staleTime: 0,
     },
   })
@@ -198,14 +200,14 @@ export function TradeDrawer({ vault, walletConnected }: TradeDrawerProps) {
     usdcAmount > 0 &&
     shareBalanceBigInt < parseUnits(usdcAmount.toString(), 18)
 
-  // USDC balance — checked at the subscribe request step; safeTransferFrom reverts if balance < amount
+  // USDC balance — read at approve and request steps; used for MAX button and insufficientUsdc check
   const { data: usdcBalance } = useReadContract({
     address: assetAddress,
     abi: ERC20_ABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
     query: {
-      enabled: !!address && !!assetAddress && mode === 'subscribe' && step === 'request',
+      enabled: !!address && !!assetAddress && mode === 'subscribe' && (step === 'approve usdc' || step === 'request'),
       staleTime: 0,
     },
   })
@@ -222,18 +224,26 @@ export function TradeDrawer({ vault, walletConnected }: TradeDrawerProps) {
     setMounted(true)
   }, [])
 
-  // Advance to next step after tx confirms
+  // Advance to next step after tx confirms and fire toast notification
   useEffect(() => {
     if (!isConfirmed) return
     if (step === 'approve usdc') {
+      addToast({ message: 'USDC APPROVED', sub: `${usdcAmount.toFixed(2)} USDC authorized`, color: 'blue', txHash: txHash as string })
       setStep('request')
     } else if (step === 'request') {
+      addToast({
+        message: mode === 'subscribe' ? 'DEPOSIT REQUESTED' : 'REDEEM REQUESTED',
+        sub: `${usdcAmount.toFixed(2)} ${mode === 'subscribe' ? 'USDC' : 'SHR'}`,
+        color: mode === 'subscribe' ? 'blue' : 'orange',
+        txHash: txHash as string,
+      })
       setStep('curator executing')
     } else if (step === 'claim ready') {
+      addToast({ message: 'CLAIMED', sub: vault.label, color: 'green', txHash: txHash as string })
       setStep('claimed')
     }
     resetWrite()
-  }, [isConfirmed, step, resetWrite])
+  }, [isConfirmed, step, resetWrite, addToast, txHash, usdcAmount, mode, vault.label])
 
   // Sync step with wallet connection state
   useEffect(() => {
@@ -296,11 +306,12 @@ export function TradeDrawer({ vault, walletConnected }: TradeDrawerProps) {
       if (claimable) {
         setMode(claimable.kind === 'subscribe' ? 'subscribe' : 'redeem')
         setStep('claim ready')
+        addToast({ message: 'CLAIM READY', sub: vault.label, color: 'orange' })
       }
     } catch {
       // polling failure is non-fatal
     }
-  }, [vault.id, address])
+  }, [vault.id, vault.label, address, addToast])
 
   useEffect(() => {
     if (step !== 'curator executing') return
@@ -500,6 +511,19 @@ export function TradeDrawer({ vault, walletConnected }: TradeDrawerProps) {
             preview only — not tradeable
           </div>
         )}
+        {vaultAddress && chainId === 84532 && (
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <span className="text-[7px] font-mono text-ix-text-faint tracking-[0.18em] uppercase">CONTRACT</span>
+            <a
+              href={`https://sepolia.basescan.org/address/${vaultAddress}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[7px] font-mono text-ix-blue hover:underline tabular"
+            >
+              {vaultAddress.slice(0, 6)}...{vaultAddress.slice(-4)}
+            </a>
+          </div>
+        )}
       </div>
 
       {/* ── Amount input ──────────────────────────────────────────────────── */}
@@ -522,6 +546,30 @@ export function TradeDrawer({ vault, walletConnected }: TradeDrawerProps) {
               {mode === 'subscribe' ? 'USDC' : 'SHR'}
             </span>
           </div>
+          {/* Balance + MAX — only shown when balance is loaded and input is active */}
+          {!(step === 'curator executing' || step === 'claim ready' || step === 'claimed') &&
+            (mode === 'subscribe' ? usdcBalanceBigInt : shareBalanceBigInt) !== undefined && (
+            <div className="flex items-center justify-between mt-1.5">
+              <span className="text-[8px] font-mono text-ix-text-faint">
+                BAL:{' '}
+                {mode === 'subscribe'
+                  ? `${parseFloat(formatUnits(usdcBalanceBigInt!, 6)).toFixed(2)} USDC`
+                  : `${parseFloat(formatUnits(shareBalanceBigInt!, 18)).toFixed(4)} SHR`}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (mode === 'subscribe' && usdcBalanceBigInt !== undefined)
+                    setAmount(formatUnits(usdcBalanceBigInt, 6))
+                  else if (mode === 'redeem' && shareBalanceBigInt !== undefined)
+                    setAmount(formatUnits(shareBalanceBigInt, 18))
+                }}
+                className="text-[8px] font-mono text-ix-blue hover:text-ix-blue-dim uppercase tracking-wider"
+              >
+                MAX
+              </button>
+            </div>
+          )}
         </div>
       )}
 
