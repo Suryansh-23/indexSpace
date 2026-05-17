@@ -11,7 +11,7 @@ import {
 } from 'recharts'
 import type { NavPoint, Vault } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { getVaultCandles } from '@/lib/indexspace-api'
 
 // ── Client-side OU walk — mirrors candles.ts parameters exactly ──────────────
@@ -36,18 +36,18 @@ function hashStr(str: string): number {
   return h >>> 0
 }
 
-// Generates synthetic 5-min candles from anchor (exclusive) up to the current
-// 5-min bucket. Seeded deterministically so the walk is stable across renders.
-// Called only when live API data is loaded — never applied to mock fallback data.
+// Generates deterministic synthetic 5-min candles from anchor up to the current
+// 5-min bucket boundary. Seeded per-vault so the walk is stable across renders.
 function generateSyntheticForward(anchor: NavPoint, vaultId: string): NavPoint[] {
   const anchorTs = new Date(anchor.ts).getTime()
-  const nowBucket = Math.floor(Date.now() / MIN5_MS) * MIN5_MS
-  if (anchorTs >= nowBucket) return []
+  const now = Date.now()
+  if (anchorTs >= now) return []
 
   const rng = lcgRand(hashStr(`${vaultId}:live:${anchorTs}`))
   const points: NavPoint[] = []
   let nav = anchor.nav
 
+  const nowBucket = Math.floor(now / MIN5_MS) * MIN5_MS
   for (let ts = anchorTs + MIN5_MS; ts <= nowBucket; ts += MIN5_MS) {
     const drift = THETA_5MIN * (NAV_MEAN - nav)
     const shock = (rng() - 0.5) * 2 * STEP_VOL_5MIN
@@ -103,6 +103,8 @@ export function IndexChart({ vault }: IndexChartProps) {
   const [range, setRange] = useState<Range>('1D')
   const [mode, setMode] = useState<ChartMode>('NAV')
   const [liveHistory, setLiveHistory] = useState<NavPoint[] | null>(null)
+  const [streamPoints, setStreamPoints] = useState<NavPoint[]>([])
+  const streamAnchorRef = useRef<NavPoint | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -118,18 +120,45 @@ export function IndexChart({ vault }: IndexChartProps) {
     return () => { cancelled = true; clearInterval(id) }
   }, [vault.id])
 
-  // Synthetic forward walk — only when live data is loaded, seeded by anchor ts
-  // so the walk is stable across re-renders. Real candles from polls naturally
-  // shift the anchor and reset the walk forward from the new real NAV.
-  const syntheticForward = useMemo(() => {
-    if (!liveHistory?.length) return []
-    const anchor = liveHistory[liveHistory.length - 1] as NavPoint
-    return generateSyntheticForward(anchor, vault.id)
+  // historicalPoints: real backend candles + deterministic synthetic fill up to now
+  const historicalPoints = useMemo(() => {
+    const base = (liveHistory ?? vault.navHistory) as NavPoint[]
+    if (!base.length) return base
+    const synthetic = generateSyntheticForward(base[base.length - 1], vault.id)
+    return [...base, ...synthetic]
   }, [liveHistory, vault.id])
 
-  const realCandles = (liveHistory ?? vault.navHistory) as NavPoint[]
-  const history = liveHistory ? [...realCandles, ...syntheticForward] : realCandles
-  const data = sliceHistory(history, range)
+  // Seed streaming anchor from the end of historical data; reset stream on data change
+  useEffect(() => {
+    streamAnchorRef.current = historicalPoints[historicalPoints.length - 1] ?? null
+    setStreamPoints([])
+  }, [historicalPoints])
+
+  // Append one OU micro-step per second — drives real-time chart movement
+  useEffect(() => {
+    const SEC_THETA = THETA_5MIN / 300
+    const SEC_VOL = (STEP_VOL_5MIN / Math.sqrt(300)) * 2
+
+    const id = setInterval(() => {
+      setStreamPoints(prev => {
+        const anchor = prev.length > 0 ? prev[prev.length - 1] : streamAnchorRef.current
+        if (!anchor) return prev
+        const nav = anchor.nav
+        const drift = SEC_THETA * (NAV_MEAN - nav)
+        const shock = (Math.random() - 0.5) * 2 * SEC_VOL
+        const newNav = Math.max(NAV_FLOOR, Math.min(NAV_CEIL, nav + drift + shock))
+        return [...prev.slice(-599), {
+          ts: new Date().toISOString(),
+          nav: parseFloat(newNav.toFixed(6)),
+          shares: anchor.shares,
+        }]
+      })
+    }, 1000)
+
+    return () => clearInterval(id)
+  }, [])
+
+  const data = sliceHistory([...historicalPoints, ...streamPoints], range)
   const isUp = vault.navChange >= 0
   const isPreview = vault.status === 'preview'
   const lineColor = isPreview ? '#F05A24' : isUp ? '#1E9E5A' : '#D62D20'
@@ -274,6 +303,7 @@ export function IndexChart({ vault }: IndexChartProps) {
               strokeWidth={1.5}
               fill={`url(#navGrad-${vault.id})`}
               dot={false}
+              isAnimationActive={false}
               activeDot={{ r: 3, fill: lineColor, stroke: '#050505', strokeWidth: 2 }}
             />
           </AreaChart>

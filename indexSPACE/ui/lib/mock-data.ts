@@ -67,7 +67,7 @@ function buildVault(idx: typeof FORECAST_INDICES[number], index: number): Vault 
     navChange: parseFloat((isLive ? ((h % 101) - 48) * 0.05 : 0).toFixed(2)),
     shares: isLive ? 10000 + (h % 40000) : 0,
     totalSupply: 100000,
-    curatorState: isLive ? ('armed' as const) : ('idle' as const),
+    curatorState: isLive ? ('active' as const) : ('idle' as const),
     simulatorState: isLive ? ('off' as const) : ('on' as const),
     usdc: isLive ? parseFloat((baseNav * 50000).toFixed(2)) : 0,
     idleUsdc: isLive ? parseFloat((baseNav * 42000).toFixed(2)) : 0,

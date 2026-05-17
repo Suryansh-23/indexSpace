@@ -1,5 +1,6 @@
 'use client'
 
+import React from 'react'
 import { cn } from '@/lib/utils'
 import type { ActivityEntry } from '@/lib/types'
 
@@ -27,6 +28,8 @@ const STATE_COLOR: Record<string, string> = {
 }
 
 export function ActivityStrip({ entries }: ActivityStripProps) {
+  const duration = Math.max(20, entries.length * 5)
+
   return (
     <footer className="h-8 bg-ix-shell border-t border-ix-border flex items-stretch shrink-0 overflow-hidden">
 
@@ -36,11 +39,25 @@ export function ActivityStrip({ entries }: ActivityStripProps) {
         <span className="text-[8px] font-mono tracking-[0.25em] text-ix-text-faint uppercase">LIVE TAPE</span>
       </div>
 
-      {/* Scrolling entries */}
-      <div className="flex items-center overflow-x-auto flex-1 gap-0">
-        {entries.map((entry) => (
-          <ActivityItem key={entry.id} entry={entry} />
-        ))}
+      {/* Marquee entries */}
+      <div className="flex-1 overflow-hidden">
+        {entries.length > 0 ? (
+          <div
+            className="marquee-track"
+            style={{ '--marquee-duration': `${duration}s` } as React.CSSProperties}
+          >
+            {entries.map((entry) => (
+              <ActivityItem key={entry.id} entry={entry} />
+            ))}
+            {entries.map((entry) => (
+              <ActivityItem key={`_${entry.id}`} entry={entry} />
+            ))}
+          </div>
+        ) : (
+          <div className="flex items-center h-full px-4">
+            <span className="text-[9px] font-mono text-ix-text-faint">NO ACTIVITY</span>
+          </div>
+        )}
       </div>
 
       {/* Network tag */}
