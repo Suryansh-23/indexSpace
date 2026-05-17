@@ -29,3 +29,4 @@ indexspace/backend/run.log
 # Foundry broadcast
 indexSPACE/contracts/broadcast/
 indexSPACE/contracts/cache/
+.vercel
