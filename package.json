@@ -4,21 +4,21 @@
   "packageManager": "bun@1.3.1",
   "workspaces": [
     "packages/*",
-    "indexSPACE/shared",
-    "indexSPACE/backend",
-    "indexSPACE/ui"
+    "indexspace/shared",
+    "indexspace/backend",
+    "indexspace/ui"
   ],
   "scripts": {
     "sync-env": "node scripts/sync-env.mjs",
-    "dev": "node scripts/sync-env.mjs && concurrently --names backend,ui --prefix-colors cyan,blue 'cd indexSPACE/backend && MOCK_VAULT=true bun run dev' 'cd indexSPACE/ui && bun run dev'",
-    "dev:real": "node scripts/sync-env.mjs && concurrently --names backend,ui --prefix-colors cyan,blue 'cd indexSPACE/backend && bun run dev' 'cd indexSPACE/ui && bun run dev'",
-    "backend": "cd indexSPACE/backend && MOCK_VAULT=true bun run dev",
-    "backend:real": "cd indexSPACE/backend && bun run dev",
-    "ui": "cd indexSPACE/ui && bun run dev",
+    "dev": "node scripts/sync-env.mjs && concurrently --names backend,ui --prefix-colors cyan,blue 'cd indexspace/backend && MOCK_VAULT=true bun run dev' 'cd indexspace/ui && bun run dev'",
+    "dev:real": "node scripts/sync-env.mjs && concurrently --names backend,ui --prefix-colors cyan,blue 'cd indexspace/backend && bun run dev' 'cd indexspace/ui && bun run dev'",
+    "backend": "cd indexspace/backend && MOCK_VAULT=true bun run dev",
+    "backend:real": "cd indexspace/backend && bun run dev",
+    "ui": "cd indexspace/ui && bun run dev",
     "stop": "node scripts/stop-dev.mjs",
-    "build": "cd indexSPACE/ui && bun run build",
-    "typecheck": "cd indexSPACE/ui && npx tsc --noEmit",
-    "screenshots": "cd indexSPACE/ui && bun run dev & sleep 4 && node indexSPACE/scripts/screenshots-desktop.mjs; kill %1 2>/dev/null"
+    "build": "cd indexspace/ui && bun run build",
+    "typecheck": "cd indexspace/ui && npx tsc --noEmit",
+    "screenshots": "cd indexspace/ui && bun run dev & sleep 4 && node indexspace/scripts/screenshots-desktop.mjs; kill %1 2>/dev/null"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",

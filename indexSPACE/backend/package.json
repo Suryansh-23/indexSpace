@@ -10,8 +10,8 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@functionspace/core": "*",
-    "@indexspace/shared": "*",
+    "@functionspace/core": "file:../../packages/core",
+    "@indexspace/shared": "file:../shared",
     "hono": "^4.0.0",
     "viem": "^2.0.0"
   },
