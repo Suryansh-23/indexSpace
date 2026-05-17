@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import { serve } from "bun";
 import { loadConfig, INDICES, LIVE_VAULTS, PREVIEW_INDICES, ANVIL_AI_VAULT, ANVIL_CRYPTO_VAULT, BASE_SEPOLIA_AI_VAULT, BASE_SEPOLIA_CRYPTO_VAULT } from "./config.ts";
 import { createDb } from "./db.ts";
-import { getFsClient } from "./sdk.ts";
+import { buildBeliefVector, getFsClient } from "./sdk.ts";
 import { MockVault } from "./mock-vault.ts";
 import { RealIndexer } from "./indexer.ts";
 import { computeSubscribeQuote, computeRedeemQuote } from "./quotes.ts";
@@ -13,6 +13,7 @@ import { seedCandleHistory, appendCurrentCandle } from "./candles.ts";
 import type { Address } from "viem";
 import { configureRunLogger, logError, logRuntime } from "./logger.ts";
 import { setFsTraceEnabled } from "./sdk.ts";
+import type { ConstituentStrategy } from "@indexspace/shared";
 
 const config = loadConfig();
 configureRunLogger(config.runLogEnabled, config.runLogPath);
@@ -177,6 +178,94 @@ app.get("/api/vaults/:vaultId/positions", (c) => {
     "SELECT * FROM fs_positions WHERE vault_id = ? ORDER BY created_at DESC LIMIT 100",
   ).all(vaultId);
   return c.json(rows);
+});
+
+app.get("/api/vaults/:vaultId/market-weights", (c) => {
+  const vaultId = c.req.param("vaultId");
+  const index = INDICES.find((i) => i.id === vaultId);
+  if (!index) return c.json({ error: "vault not found" }, 404);
+
+  const isConstituentStrategy = (value: unknown): value is ConstituentStrategy => {
+    if (!value || typeof value !== "object") return false;
+    const strategy = value as Partial<ConstituentStrategy>;
+    return (
+      typeof strategy.weight === "number" &&
+      typeof strategy.centerNormalized === "number" &&
+      typeof strategy.widthNormalized === "number" &&
+      (strategy.shape === "gaussian" ||
+        strategy.shape === "range" ||
+        strategy.shape === "right_skew" ||
+        strategy.shape === "left_skew")
+    );
+  };
+
+  const parseBeliefVector = (raw: string | null): number[] | null => {
+    if (!raw) return null;
+
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const belief = parsed.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+        return belief.length > 0 ? belief : null;
+      }
+
+      if (isConstituentStrategy(parsed)) {
+        return buildBeliefVector(24, 0, 1, parsed);
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  type PosRow = {
+    market_id: number;
+    collateral: string;
+    belief_json: string | null;
+  };
+
+  // Fetch all open positions ordered newest first so first-seen per market = latest belief
+  const positions = db.query(
+    "SELECT market_id, collateral, belief_json FROM fs_positions WHERE vault_id = ? AND status = 'open' ORDER BY created_at DESC",
+  ).all(vaultId) as PosRow[];
+
+  // Aggregate per market in JS — positions count is small (<= ~100)
+  const aggMap = new Map<number, { collateral: number; openPositions: number; latestBelief: number[] | null }>();
+  for (const pos of positions) {
+    const existing = aggMap.get(pos.market_id);
+    if (!existing) {
+      aggMap.set(pos.market_id, {
+        collateral: parseFloat(pos.collateral),
+        openPositions: 1,
+        latestBelief: parseBeliefVector(pos.belief_json),
+      });
+    } else {
+      existing.collateral += parseFloat(pos.collateral);
+      existing.openPositions++;
+      // latest belief already captured (DESC order, first entry = newest)
+    }
+  }
+
+  const markets = index.constituents.map((c) => {
+    const agg = aggMap.get(c.marketId);
+    return {
+      marketId: c.marketId,
+      label: c.label,
+      weight: c.weight,
+      orientation: c.orientation,
+      role: c.role,
+      collateralTotal: agg?.collateral ?? 0,
+      openPositions: agg?.openPositions ?? 0,
+      latestBelief: agg?.latestBelief ?? null,
+    };
+  });
+
+  return c.json({
+    vaultId,
+    totalOpenCollateral: Array.from(aggMap.values()).reduce((s, a) => s + a.collateral, 0),
+    markets,
+  });
 });
 
 app.get("/api/vaults/:vaultId/candles", (c) => {
@@ -344,8 +433,6 @@ if (config.mockVault) {
       const lastCandle = getLastCandleState(idx.id);
       const accountingNav = totalShares > 0 ? usdcBalance / totalShares : lastCandle?.nav ?? 100.0;
       const lastClose = lastCandle?.nav ?? 0;
-      // Only persist a candle when a real trade has moved the NAV — keeps the DB
-      // as ground truth only. Synthetic fill between candles is handled client-side.
       if (lastClose === 0 || Math.abs(accountingNav - lastClose) / lastClose > 0.0001) {
         const shareSupply = totalShares > 0 ? totalShares : lastCandle?.shares || getLastNonZeroCandleShares(idx.id);
         appendCurrentCandle(db, idx.id, accountingNav, shareSupply);

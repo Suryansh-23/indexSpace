@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-const CANDLE_SEED_VERSION = 4;
+const CANDLE_SEED_VERSION = 5;
 const MIN5_MS = 5 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -10,8 +10,8 @@ const SEED_TOTAL_DAYS = 90;
 const SEED_HOURS_HOURLY = (SEED_TOTAL_DAYS - SEED_RECENT_DAYS) * 24;
 const SEED_5MIN_BUCKETS = SEED_RECENT_DAYS * 24 * 12;
 
-// NAV baseline ~100 (index-style, not near-par). Test deposits of $1–$10 USDC
-// are <0.001% of the seeded pool at these scales, so they cause no visible NAV spike.
+// NAV baseline ~100 (index-style, not near-par). Keep the seeded fund modest so
+// drawer stats and chart-era share supply read like a smaller demo vehicle.
 const NAV_MEAN = 100.0;
 const NAV_FLOOR = 82.0;
 const NAV_CEIL = 140.0;
@@ -23,10 +23,11 @@ const VAULT_START_NAV: Record<string, number> = {
   "crypto-reflexivity": 103.0, // starts slightly above par
 };
 
-// 1 million shares each: a $1 test deposit at NAV≈100 adds 10,000 shares = 1% dilution max
+// 10k seeded shares each keeps historical stats legible without pretending the
+// demo vault already manages a nine-figure pool.
 const VAULT_TARGET_SHARES: Record<string, number> = {
-  "ai-acceleration":  1_000_000,
-  "crypto-reflexivity": 1_000_000,
+  "ai-acceleration":  10_000,
+  "crypto-reflexivity": 10_000,
 };
 
 // Fake genesis controller — never a real user address
@@ -109,7 +110,7 @@ export function seedCandleHistory(db: Database, vaultId: string): void {
   db.run("DELETE FROM index_candles WHERE vault_id = ?", [vaultId]);
 
   const startNav = VAULT_START_NAV[vaultId] ?? NAV_MEAN;
-  const targetShares = VAULT_TARGET_SHARES[vaultId] ?? 1_000_000;
+  const targetShares = VAULT_TARGET_SHARES[vaultId] ?? 10_000;
   const totalSteps = SEED_HOURS_HOURLY + SEED_5MIN_BUCKETS;
 
   // Hourly walk: theta=0.004 per hour, mean-reverting to NAV_MEAN

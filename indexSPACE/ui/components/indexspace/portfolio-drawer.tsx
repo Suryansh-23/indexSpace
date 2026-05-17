@@ -3,10 +3,9 @@
 import { useState, useEffect } from 'react'
 import { useAccount } from 'wagmi'
 import { cn } from '@/lib/utils'
-import { X } from 'lucide-react'
-import type { ActivityEntry } from '@/lib/types'
-import { ACTIVITY } from '@/lib/mock-data'
-import { getVaultRequests, getVault } from '@/lib/indexspace-api'
+import { X, ChevronDown, ChevronRight } from 'lucide-react'
+import type { ActivityEntry, VaultMarketWeights } from '@/lib/types'
+import { getVaultRequests, getVault, getVaultMarketWeights } from '@/lib/indexspace-api'
 
 const LIVE_VAULTS = [
   { id: 'ai-acceleration',    label: 'VAULT 01', name: 'AI ACCELERATION',    color: '#0071BB' },
@@ -63,8 +62,8 @@ export function PortfolioDrawer({ open, onClose, walletConnected }: PortfolioDra
       {/* Backdrop */}
       <div className="flex-1 bg-black/70" onClick={onClose} />
 
-      {/* Drawer */}
-      <aside className="w-[360px] bg-ix-shell border-l border-ix-border flex flex-col h-full">
+      {/* Drawer — wider to accommodate market breakdown */}
+      <aside className="w-[440px] bg-ix-shell border-l border-ix-border flex flex-col h-full">
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-ix-border">
@@ -123,7 +122,6 @@ export function PortfolioDrawer({ open, onClose, walletConnected }: PortfolioDra
 function DisconnectedState() {
   return (
     <div className="p-6">
-      {/* Account glyph */}
       <div className="flex flex-col gap-px mb-8 mt-4">
         {[3, 5, 4, 3, 5, 2].map((w, i) => (
           <div key={i} className="flex gap-px">
@@ -166,8 +164,13 @@ function DisconnectedState() {
 
 function PortfolioContent() {
   const { address } = useAccount()
-  type HoldingRow = { id: string; label: string; name: string; color: string; shares: number; nav: number; claimable: number }
+  type HoldingRow = {
+    id: string; label: string; name: string; color: string
+    shares: number; nav: number; claimable: number
+    weights: VaultMarketWeights | null
+  }
   const [holdings, setHoldings] = useState<HoldingRow[]>([])
+  const [expandedVault, setExpandedVault] = useState<string | null>(null)
 
   useEffect(() => {
     if (!address) return
@@ -176,9 +179,10 @@ function PortfolioContent() {
     async function load() {
       const rows: HoldingRow[] = []
       for (const vc of LIVE_VAULTS) {
-        const [requests, vaultData] = await Promise.all([
+        const [requests, vaultData, weights] = await Promise.all([
           getVaultRequests(vc.id, address!),
           getVault(vc.id),
+          getVaultMarketWeights(vc.id),
         ])
         const nav = vaultData?.nav ?? 1
         const raw = requests as any[]
@@ -189,7 +193,7 @@ function PortfolioContent() {
           .filter((r) => r.kind === 'redeem' && ['claimable', 'claimed'].includes(r.status))
           .reduce((s, r) => s + parseFloat(r.share_amount ?? '0'), 0)
         const claimable = raw.filter((r) => r.status === 'claimable').length
-        rows.push({ ...vc, shares: Math.max(0, subShares - rdmShares), nav, claimable })
+        rows.push({ ...vc, shares: Math.max(0, subShares - rdmShares), nav, claimable, weights })
       }
       if (!cancelled) setHoldings(rows)
     }
@@ -206,28 +210,61 @@ function PortfolioContent() {
       <div className="px-5 py-4 border-b border-ix-border">
         <div className="text-[8px] font-mono tracking-[0.22em] text-ix-text-faint uppercase mb-1.5">TOTAL VAULT VALUE</div>
         <div className="text-[28px] font-mono tabular text-ix-text font-medium leading-none">${total.toFixed(2)}</div>
-        <div className="text-[9px] font-mono text-ix-text-muted mt-1 tracking-wider">≈ USDC / BASE SEPOLIA</div>
+        <div className="text-[9px] font-mono text-ix-text-muted mt-1 tracking-wider">approx USDC / Base Sepolia</div>
       </div>
 
       <div className="px-5 pt-4">
         <div className="text-[8px] font-mono tracking-[0.22em] text-ix-text-faint uppercase mb-3">VAULT SHARES</div>
-        {holdings.map((h) => (
-          <div key={h.id} className="py-3.5 border-b border-ix-border-dim">
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex items-center gap-2">
-                <div className="w-[3px] h-4 shrink-0" style={{ backgroundColor: h.color }} />
-                <span className="text-[12px] font-mono text-ix-text font-medium">{h.label}</span>
+        {holdings.map((h) => {
+          const canShowMarketPositions =
+            h.shares > 0 &&
+            !!h.weights &&
+            h.weights.totalOpenCollateral > 0 &&
+            h.weights.markets.some((market) => market.openPositions > 0)
+
+          return (
+            <div key={h.id} className="border-b border-ix-border-dim">
+              {/* Vault row */}
+              <div className="py-3.5">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <div className="w-[3px] h-4 shrink-0" style={{ backgroundColor: h.color }} />
+                    <span className="text-[12px] font-mono text-ix-text font-medium">{h.label}</span>
+                  </div>
+                  <span className="text-[13px] font-mono tabular text-ix-text">${(h.shares * h.nav).toFixed(2)}</span>
+                </div>
+                <div className="flex items-center justify-between pl-[11px]">
+                  <span className="text-[10px] font-mono text-ix-text-muted">{h.name}</span>
+                  <span className="text-[9px] font-mono tabular text-ix-text-faint">
+                    {h.shares > 0 ? `${h.shares.toFixed(4)} shrs @ ${h.nav.toFixed(4)}` : '— shares'}
+                  </span>
+                </div>
+
+                {/* Toggle for market breakdown */}
+                {canShowMarketPositions && (
+                  <button
+                    onClick={() => setExpandedVault(expandedVault === h.id ? null : h.id)}
+                    className="flex items-center gap-1 pl-[11px] mt-2 text-[8px] font-mono text-ix-text-faint hover:text-ix-text-muted transition-colors uppercase tracking-wider"
+                  >
+                    {expandedVault === h.id ? <ChevronDown size={9} /> : <ChevronRight size={9} />}
+                    {expandedVault === h.id ? 'HIDE' : 'SHOW'} MARKET POSITIONS
+                  </button>
+                )}
               </div>
-              <span className="text-[13px] font-mono tabular text-ix-text">${(h.shares * h.nav).toFixed(2)}</span>
+
+              {/* Market breakdown dropdown */}
+              {expandedVault === h.id && canShowMarketPositions && h.weights && (
+                <MarketBreakdown
+                  weights={h.weights}
+                  userShareFraction={h.weights.totalOpenCollateral > 0 && h.nav > 0 && h.shares > 0
+                    ? (h.shares * h.nav) / (h.weights.totalOpenCollateral > 0 ? h.weights.totalOpenCollateral : h.shares * h.nav)
+                    : 0}
+                  vaultColor={h.color}
+                />
+              )}
             </div>
-            <div className="flex items-center justify-between pl-[11px]">
-              <span className="text-[10px] font-mono text-ix-text-muted">{h.name}</span>
-              <span className="text-[9px] font-mono tabular text-ix-text-faint">
-                {h.shares > 0 ? `${h.shares.toFixed(4)} shrs @ ${h.nav.toFixed(4)}` : '— shares'}
-              </span>
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       <div className="px-5 py-4 border-t border-ix-border">
@@ -246,6 +283,154 @@ function PortfolioContent() {
         </div>
       </div>
     </div>
+  )
+}
+
+// ── Market breakdown panel ────────────────────────────────────────────────────
+
+function MarketBreakdown({ weights, userShareFraction, vaultColor }: {
+  weights: VaultMarketWeights
+  userShareFraction: number
+  vaultColor: string
+}) {
+  return (
+    <div className="bg-ix-panel-warm border-t border-ix-border-dim mb-4 mx-0">
+      <div className="px-5 py-3 border-b border-ix-border-dim flex items-center justify-between">
+        <span className="text-[8px] font-mono tracking-[0.24em] text-ix-text-faint uppercase">FUNCTIONSPACE MARKETS</span>
+        <span className="text-[8px] font-mono text-ix-text-faint tabular">
+          {weights.totalOpenCollateral.toFixed(2)} USDC open
+        </span>
+      </div>
+      {weights.markets.map((m) => (
+        <MarketRow
+          key={m.marketId}
+          market={m}
+          userShareFraction={userShareFraction}
+          vaultColor={vaultColor}
+        />
+      ))}
+    </div>
+  )
+}
+
+function MarketRow({ market, userShareFraction, vaultColor }: {
+  market: VaultMarketWeights['markets'][number]
+  userShareFraction: number
+  vaultColor: string
+}) {
+  const userAlloc = market.collateralTotal * userShareFraction
+
+  // Short label: first few words of the full market question
+  const shortLabel = market.label.split(' ').slice(0, 4).join(' ')
+
+  const orientationTag: Record<string, string> = {
+    higher_is_bullish: 'BULL',
+    lower_is_bullish:  'BULL-',
+    higher_is_stress:  'STRSS',
+    lower_is_stress:   'STRSS-',
+  }
+
+  return (
+    <div className="px-5 py-4 border-b border-ix-border-dim last:border-b-0">
+      <div className="flex items-start gap-4">
+        {/* Left: belief sparkline */}
+        <div className="shrink-0 mt-0.5">
+          {market.latestBelief ? (
+            <BeliefSparkline belief={market.latestBelief} color={vaultColor} width={86} height={42} />
+          ) : (
+            <div className="w-[86px] h-[42px] bg-ix-panel border border-ix-border-dim flex items-center justify-center">
+              <span className="text-[7px] font-mono tracking-[0.16em] text-ix-text-faint">NO DATA</span>
+            </div>
+          )}
+        </div>
+
+        {/* Right: market info */}
+        <div className="flex-1 min-w-0 pt-0.5">
+          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+            <span className="text-[8px] font-mono text-ix-text-faint tabular">#{market.marketId}</span>
+            <span
+              className="text-[7px] font-mono px-1.5 py-[2px] leading-none"
+              style={{ backgroundColor: vaultColor + '22', color: vaultColor }}
+            >
+              {orientationTag[market.orientation] ?? market.orientation}
+            </span>
+            <span className="text-[8px] font-mono text-ix-text-faint">{market.weight}% weight</span>
+          </div>
+          <div className="text-[10px] font-mono text-ix-text leading-[1.35]" title={market.label}>
+            {shortLabel}
+          </div>
+          <div className="flex items-center gap-x-3 gap-y-1.5 mt-2 flex-wrap">
+            <span className="text-[8px] font-mono text-ix-text-faint tabular">
+              {market.openPositions} pos
+            </span>
+            <span className="text-[8px] font-mono text-ix-text-faint tabular">
+              {market.collateralTotal.toFixed(2)} USDC total
+            </span>
+            {userShareFraction > 0 && (
+              <span className="text-[8px] font-mono tabular" style={{ color: vaultColor }}>
+                ~{userAlloc.toFixed(2)} yours
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Belief sparkline SVG ──────────────────────────────────────────────────────
+
+function BeliefSparkline({ belief, color, width, height }: {
+  belief: number[] | null
+  color: string
+  width: number
+  height: number
+}) {
+  const points = Array.isArray(belief)
+    ? belief.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    : []
+
+  if (points.length === 0) return null
+
+  const max = Math.max(...points)
+  if (max === 0) return null
+
+  const n = points.length
+  const pad = 2
+
+  const pts = points.map((v, i) => ({
+    x: n === 1 ? width / 2 : pad + (i / (n - 1)) * (width - pad * 2),
+    y: height - pad - ((v / max) * (height - pad * 2)),
+  }))
+
+  const ptStr = pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L ')
+  const strokePath = `M ${ptStr}`
+  const fillPath = `M ${pts[0].x.toFixed(1)},${height - pad} L ${ptStr} L ${pts[pts.length - 1].x.toFixed(1)},${height - pad} Z`
+
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="overflow-visible">
+      {/* Fill */}
+      <path
+        d={fillPath}
+        fill={color}
+        fillOpacity={0.18}
+      />
+      {/* Stroke */}
+      <path
+        d={strokePath}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.8}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        opacity={0.9}
+      />
+      {/* Baseline */}
+      <line
+        x1={pad} y1={height - pad} x2={width - pad} y2={height - pad}
+        stroke={color} strokeWidth={0.5} opacity={0.3}
+      />
+    </svg>
   )
 }
 
